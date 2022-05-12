@@ -37,7 +37,7 @@ namespace {
 // in case the Stub builder links in a separate copy of libHalide, rather
 // sharing the same halide.so that is built by default.
 void halide_python_error(JITUserContext *, const char *msg) {
-    throw Error(msg);
+    throw Halide::Error(msg);
 }
 
 void halide_python_print(JITUserContext *, const char *msg) {
@@ -53,7 +53,7 @@ public:
     }
 
     void error(const char *msg) override {
-        throw Error(msg);
+        throw Halide::Error(msg);
         // This method must not return!
     }
 };
@@ -99,21 +99,21 @@ struct cast_error_string {
 template<>
 std::string cast_error_string<Buffer<>>::operator()(const py::handle &h, const std::string &name) {
     std::ostringstream o;
-    o << "Input " << name << " requires an ImageParam or Buffer argument when using generate(), but saw " << (std::string)py::str(py::type::handle_of(h));
+    o << "Input " << name << " requires an ImageParam or Buffer argument when using call(), but saw " << (std::string)py::str(py::type::handle_of(h));
     return o.str();
 }
 
 template<>
 std::string cast_error_string<Func>::operator()(const py::handle &h, const std::string &name) {
     std::ostringstream o;
-    o << "Input " << name << " requires a Func argument when using generate(), but saw " << (std::string)py::str(py::type::handle_of(h));
+    o << "Input " << name << " requires a Func argument when using call(), but saw " << (std::string)py::str(py::type::handle_of(h));
     return o.str();
 }
 
 template<>
 std::string cast_error_string<Expr>::operator()(const py::handle &h, const std::string &name) {
     std::ostringstream o;
-    o << "Input " << name << " requires a Param (or scalar literal) argument when using generate(), but saw " << (std::string)py::str(py::type::handle_of(h));
+    o << "Input " << name << " requires a Param (or scalar literal) argument when using call(), but saw " << (std::string)py::str(py::type::handle_of(h));
     return o.str();
 }
 
@@ -149,10 +149,10 @@ std::vector<T> to_input_vector(const py::object &value, const std::string &name)
     return v;
 }
 
-py::object generate_impl(const GeneratorFactory &factory,
-                         const GeneratorContext &context,
-                         const py::args &args,
-                         const py::kwargs &kwargs) {
+py::object call_impl(const GeneratorFactory &factory,
+                     const GeneratorContext &context,
+                     const py::args &args,
+                     const py::kwargs &kwargs) {
     auto generator = factory(context);
 
     const auto arg_infos = generator->arginfos();
@@ -173,11 +173,16 @@ py::object generate_impl(const GeneratorFactory &factory,
     // called "generator_params", which is expected to be a python dict.
     // If generatorparams are specified, do them first, before any Inputs.
     if (kwargs.contains("generator_params")) {
-        py::dict gp = py::cast<py::dict>(kwargs["generator_params"]);
+        py::handle h = kwargs["generator_params"];
+        _halide_user_assert(py::isinstance<py::dict>(h)) << "generator_params must be a dict";
+        py::dict gp = py::cast<py::dict>(h);
         for (auto item : gp) {
             const std::string gp_name = py::str(item.first).cast<std::string>();
             const py::handle gp_value = item.second;
             if (py::isinstance<LoopLevel>(gp_value)) {
+                // Note that while Python Generators don't support LoopLevels,
+                // C++ Generators do, and that's what we're calling here, so
+                // be sure to allow passing 'em in.
                 generator->set_generatorparam_value(gp_name, gp_value.cast<LoopLevel>());
             } else if (py::isinstance<py::list>(gp_value)) {
                 // Convert [hl.UInt(8), hl.Int(16)] -> uint8,int16
@@ -274,10 +279,10 @@ py::object generate_impl(const GeneratorFactory &factory,
 
 void pystub_init(pybind11::module &m, const GeneratorFactory &factory) {
     m.def(
-        "generate", [factory](const Halide::Target &target, const py::args &args, const py::kwargs &kwargs) -> py::object {
-            return generate_impl(factory, Halide::GeneratorContext(target), args, kwargs);
+        "call", [factory](const Halide::GeneratorContext &context, const py::args &args, const py::kwargs &kwargs) -> py::object {
+            return call_impl(factory, context, args, kwargs);
         },
-        py::arg("target"));
+        py::arg("context"));
 }
 
 }  // namespace

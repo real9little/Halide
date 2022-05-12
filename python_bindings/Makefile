@@ -50,12 +50,27 @@ CCFLAGS := $(filter-out -Wstrict-prototypes,$(CCFLAGS))
 LDFLAGS += -lz $(USE_EXPORT_DYNAMIC)
 LDFLAGS += -Wl,-rpath,$(dir $(LIBHALIDE))
 
+$(BIN)/binary2cpp: $(HALIDE_PATH)/tools/binary2cpp.cpp
+	@echo Building $@...
+	@mkdir -p $(@D)
+	@$(CXX) $(CCFLAGS) $< -o $@
+
+$(BIN)/src/builtin_helpers_src.cpp: $(ROOT_DIR)/src/builtin_helpers_src.py $(BIN)/binary2cpp
+	@echo Building $@...
+	@mkdir -p $(@D)
+	@$(BIN)/binary2cpp builtin_helpers_src < $< > $@
+
+$(BIN)/src/builtin_helpers_src.o: $(BIN)/src/builtin_helpers_src.cpp
+	@echo Building $@...
+	@mkdir -p $(@D)
+	@$(CXX) $(CCFLAGS) -c $< -o $@
+
 PY_SRCS=$(shell ls $(ROOT_DIR)/src/*.cpp)
 PY_OBJS=$(PY_SRCS:$(ROOT_DIR)/src/%.cpp=$(BIN)/src/%.o)
 
 MODULE=$(BIN)/halide$(SUFFIX)
 
-$(MODULE): $(PY_OBJS) $(LIBHALIDE)
+$(MODULE): $(PY_OBJS) $(BIN)/src/builtin_helpers_src.o $(LIBHALIDE)
 	@echo Building $@...
 	@mkdir -p $(@D)
 	@$(CXX) $^ $(LDFLAGS) -shared -o $@
@@ -103,23 +118,24 @@ $(BIN)/PyStubImpl.o: $(ROOT_DIR)/stub/PyStubImpl.cpp $(HALIDE_DISTRIB_PATH)/incl
 	@mkdir -p $(@D)
 	@$(CXX) $(CCFLAGS) -c $< -o $@
 
-# Compile the generators:
+# Compile all the C++ generators:
 $(BIN)/%.generator: $(HALIDE_DISTRIB_PATH)/tools/GenGen.cpp $(BIN)/%_generator.o $(LIBHALIDE)
 	@echo Building $@...
 	@mkdir -p $(@D)
 	@$(CXX) $(CCFLAGS) $(LDFLAGS) $^ -o $@
 
-# Special generator for generating a runtime:
-$(BIN)/runtime.generator: $(HALIDE_DISTRIB_PATH)/tools/GenGen.cpp $(LIBHALIDE)
-	@echo Building $@...
-	@mkdir -p $(@D)
-	@$(CXX) $(CCFLAGS) $(LDFLAGS) $^ -o $@
-
 # Generate a runtime:
-$(BIN)/runtime.a: $(BIN)/runtime.generator
+$(BIN)/runtime_generator.py:
 	@echo Building $@...
 	@mkdir -p $(@D)
-	@$< -r runtime -o $(BIN) target=host
+	@echo "import halide as hl" > $@
+	@echo "if __name__ == '__main__':" >> $@
+	@echo "    hl.main()" >> $@
+
+$(BIN)/runtime.a: $(BIN)/runtime_generator.py $(MODULE)
+	@echo Building $@...
+	@mkdir -p $(@D)
+	@$(PYTHON) $< -r runtime -o $(BIN) target=host
 
 # Construct linker script that will export *just* the PyInit entry
 # point we want. (If we don't do this we can have interesting failures
@@ -142,20 +158,28 @@ endif
 # Some Generators require extra Halide Target Features to be set.
 FEATURES_user_context=-user_context
 
-# Some Generators have undefined types, sizes, etc that are useful for Stubs extensions,
+# Some Generators have undefined types, sizes, etc that are useful for Stub extensions,
 # but unacceptable for AOT Extensions; ensure that all of those are explicitly
 # specified for AOT. (We currently don't use or test these in AOT form, so the settings
 # are somewhat arbitrary.)
 GENPARAMS_complex=\
-	array_input.size=2 \
-	array_input.type=uint8 \
-	int_arg.size=2 \
 	simple_input.type=uint8 \
+	tuple_output.type=float32,float32 \
 	untyped_buffer_input.type=uint8 \
-	untyped_buffer_output.type=uint8
+	untyped_buffer_output.type=uint8 \
+	untyped_buffer_output.dim=3
 
-GENPARAMS_simple=\
-	func_input.type=uint8
+GENPARAMS_complexpy=$(GENPARAMS_complex)
+
+$(BIN)/addconstant_with_offset_42.generator $(BIN)/addconstant_with_negative_offset.generator: $(BIN)/addconstant.generator
+	@echo Building $@...
+	@mkdir -p $(@D)
+	@ln -s $< $@
+
+$(BIN)/addconstant_with_offset_42_generator.o $(BIN)/addconstant_with_negative_offset_generator.o: $(BIN)/addconstant_generator.o
+	@echo Building $@...
+	@mkdir -p $(@D)
+	@ln -s $< $@
 
 # Run the Generator to produce a static library of AOT code,
 # plus the 'python_extension' code necessary to produce a useful
@@ -167,7 +191,26 @@ $(BIN)/%.py.cpp $(BIN)/%.a $(BIN)/%.h: $(BIN)/%.generator
 	    -g $(notdir $(basename $<)) \
 	    -o $(BIN) \
 	    target=host-no_runtime$(FEATURES_$(notdir $(basename $<))) \
-	    $(GENPARAMS_$(notdir $(basename $<)))
+	    $(GENPARAMS_$*)
+
+$(BIN)/%_generator.py: $(ROOT_DIR)/correctness/generators/%_generator.py
+	@echo Building $@...
+	@mkdir -p $(@D)
+	@ln -s $< $@
+
+$(BIN)/addconstantpy_with_offset_42_generator.py $(BIN)/addconstantpy_with_negative_offset_generator.py: $(BIN)/addconstantpy_generator.py
+	@echo Building $@...
+	@mkdir -p $(@D)
+	@ln -s $< $@
+
+# Make each Python generator generate a Python extension:
+$(BIN)/%.py.cpp $(BIN)/%.a $(BIN)/%.h: $(BIN)/%_generator.py $(MODULE)
+	@echo Building $@...
+	@PYTHONPATH="$(BIN):$$PYTHONPATH" $(PYTHON) $< \
+	    -e static_library,c_header,python_extension \
+	    -g $(subst _generator,,$(notdir $(basename $<))) -o $(BIN) \
+	    target=host$(target_features_$(subst _generator,,$(notdir $(basename $<)))) \
+	    $(GENPARAMS_$*)
 
 # Compile the generated Python extension(s):
 $(BIN)/%.py.o: $(BIN)/%.py.cpp
@@ -198,9 +241,26 @@ $(BIN)/stub/%_stub.so: $(BIN)/%_PyStub.o $(BIN)/PyStubImpl.o $(BIN)/%_generator.
 	@mkdir -p $(@D)
 	@$(CXX) $(LDFLAGS) $(filter-out %.ldscript,$^) -shared $(subst %LDSCRIPT%,$(BIN)/$*_stub.ldscript,$(PYEXT_LDSCRIPT_FLAG)) -o $@
 
-GENERATOR_SRCS=$(shell ls $(ROOT_DIR)/correctness/generators/*_generator.cpp)
-GENERATOR_AOT_EXTENSIONS=$(GENERATOR_SRCS:$(ROOT_DIR)/correctness/generators/%_generator.cpp=$(BIN)/aot/%.so)
-GENERATOR_STUB_EXTENSIONS=$(GENERATOR_SRCS:$(ROOT_DIR)/correctness/generators/%_generator.cpp=$(BIN)/stub/%_stub.so)
+CPP_GENERATOR_OUTPUTS=\
+	addconstant \
+	addconstant_with_offset_42 \
+	addconstant_with_negative_offset \
+	bit \
+	complex \
+	simple \
+	user_context
+
+PY_GENERATOR_OUTPUTS=\
+	addconstantpy \
+	addconstantpy_with_offset_42 \
+	addconstantpy_with_negative_offset \
+	bitpy \
+	complexpy \
+	simplepy
+
+GENERATOR_AOT_EXTENSIONS=$(CPP_GENERATOR_OUTPUTS:%=$(BIN)/aot/%.so) $(PY_GENERATOR_OUTPUTS:%=$(BIN)/aot/%.so)
+# Only CPP Generators get Stub extensions (Python Generators can be imported directly)
+GENERATOR_STUB_EXTENSIONS=$(CPP_GENERATOR_OUTPUTS:%=$(BIN)/stub/%_stub.so)
 
 APPS = $(shell ls $(ROOT_DIR)/apps/*.py)
 CORRECTNESS = $(shell ls $(ROOT_DIR)/correctness/*.py)
@@ -224,7 +284,7 @@ test_correctness: $(CORRECTNESS:$(ROOT_DIR)/correctness/%.py=test_correctness_%)
 test_correctness_%: $(ROOT_DIR)/correctness/%.py $(MODULE) $(GENERATOR_AOT_EXTENSIONS) $(GENERATOR_STUB_EXTENSIONS)
 	@echo Testing $*...
 	@mkdir -p $(TEST_TMP)
-	@cd $(TEST_TMP); PYTHONPATH="$(BIN)/aot:$(BIN)/stub:$(BIN):$$PYTHONPATH" $(PYTHON) $<
+	@cd $(TEST_TMP); PYTHONPATH="$(ROOT_DIR)/correctness/generators:$(BIN)/aot:$(BIN)/stub:$(BIN):$$PYTHONPATH" $(PYTHON) $<
 
 .PHONY: test_tutorial
 test_tutorial: $(TUTORIAL:$(ROOT_DIR)/tutorial/%.py=test_tutorial_%)

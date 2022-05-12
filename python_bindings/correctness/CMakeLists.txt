@@ -1,3 +1,5 @@
+include(MakeShellPath)
+
 add_subdirectory(generators)
 
 add_library(the_sort_function MODULE the_sort_function.c)
@@ -29,6 +31,7 @@ set(TESTS
 
 # Use generator expressions to get the true output paths of these files.
 make_shell_path(PYTHONPATH
+                "${CMAKE_CURRENT_SOURCE_DIR}/generators"
                 "$<TARGET_FILE_DIR:py_aot_bit>"
                 "$<TARGET_FILE_DIR:py_stub_bit>"
                 "$<TARGET_FILE_DIR:Halide::Python>"
@@ -38,7 +41,10 @@ foreach (TEST IN LISTS TESTS)
     get_filename_component(TEST_NAME ${TEST} NAME_WE)
     add_test(NAME python_correctness_${TEST_NAME}
              COMMAND Python3::Interpreter "$<SHELL_PATH:${CMAKE_CURRENT_SOURCE_DIR}/${TEST}>")
+    # Ensure that everything in generators/ is built before us. This is dramatic overkill
+    # but simplifies our build setup considerably.
     set_tests_properties(python_correctness_${TEST_NAME} PROPERTIES
                          LABELS "python"
+                         DEPENDS ${PYTHON_CORRECTNESS_GENERATOR_DEPS}
                          ENVIRONMENT "PYTHONPATH=${PYTHONPATH};HL_TARGET=${Halide_TARGET}")
 endforeach ()
