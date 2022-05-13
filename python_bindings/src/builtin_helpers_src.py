@@ -395,7 +395,10 @@ class Generator(ABC):
 
         generator._advance_to_stage(_Stage.configure_called)
 
-        _check(len(args) <= len(generator._arginfos_in), "Generator '%s' allows at most %d positional args, but %d were specified." % (generator._get_name(), len(generator._arginfos_in), len(args)))
+        _check(
+            len(args) <= len(generator._arginfos_in),
+            "Generator '%s' allows at most %d positional args, but %d were specified." %
+            (generator._get_name(), len(generator._arginfos_in), len(args)))
 
         inputs_set = []
         for i in range(0, len(args)):
@@ -413,7 +416,9 @@ class Generator(ABC):
             inputs_set.append(k)
             generator._bind_input(k, [v])
 
-        _check(len(inputs_set) == len(generator._arginfos_in), "Generator '%s' requires %d args, but %d were specified." % (generator._get_name(), len(generator._arginfos_in), len(inputs_set)))
+        _check(
+            len(inputs_set) == len(generator._arginfos_in), "Generator '%s' requires %d args, but %d were specified." %
+            (generator._get_name(), len(generator._arginfos_in), len(inputs_set)))
 
         generator._build_pipeline()
 
