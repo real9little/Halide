@@ -59,22 +59,17 @@ def test_simple(cls):
     _realize_and_check(f, k)
 
     f = cls.call(ctx, buffer_input=b_in, float_arg=3.5, generator_params=gp)
+
+    # Inputs w/ mixed by-position and by-name should be ok
+    f = cls.call(ctx, b_in, float_arg=3.5, generator_params=gp)
     _realize_and_check(f, k)
 
     # ----------- Test various failure modes
     try:
-        # Inputs w/ mixed by-position and by-name
-        f = cls.call(ctx, b_in, float_arg=3.5)
-    except hl.HalideError as e:
-        assert 'Cannot use both positional and keyword arguments for inputs.' in str(e)
-    else:
-        assert False, 'Did not see expected exception!'
-
-    try:
         # too many positional args
         f = cls.call(ctx, b_in, 3.5, 4)
     except hl.HalideError as e:
-        assert 'Expected exactly 2 positional args for inputs, but saw 3.' in str(e)
+        assert 'allows at most 2 positional args, but 3 were specified.' in str(e)
     else:
         assert False, 'Did not see expected exception!'
 
@@ -82,7 +77,7 @@ def test_simple(cls):
         # too few positional args
         f = cls.call(ctx, b_in)
     except hl.HalideError as e:
-        assert 'Expected exactly 2 positional args for inputs, but saw 1.' in str(e)
+        assert 'requires 2 args, but 1 were specified.' in str(e)
     else:
         assert False, 'Did not see expected exception!'
 
@@ -106,7 +101,7 @@ def test_simple(cls):
         # Input specified by both pos and kwarg
         f = cls.call(ctx, b_in, 3.5, float_arg=4.5)
     except hl.HalideError as e:
-        assert "Cannot use both positional and keyword arguments for inputs." in str(e)
+        assert "Input float_arg specified multiple times." in str(e)
     else:
         assert False, 'Did not see expected exception!'
 
@@ -159,7 +154,7 @@ def _make_constant_image(type):
     return constant_image
 
 
-def test_complex(cls):
+def test_complex(cls, extra_input_name = ""):
     constant_image = _make_constant_image(hl.UInt(8))
     constant_image_u16 = _make_constant_image(hl.UInt(16))
     input = hl.ImageParam(hl.UInt(8), 3, 'input')
@@ -171,23 +166,27 @@ def test_complex(cls):
 
     float_arg = 1.25
     int_arg = 33
+    gp = {
+        "simple_input.type": hl.UInt(8),
+        "tuple_output.type": [hl.Float(32), hl.Float(32)],
+        "untyped_buffer_input.type": hl.UInt(8),
+        "untyped_buffer_output.dim": 3,
+        "untyped_buffer_output.type": hl.UInt(8),
+        "vectorize": True,
+    }
+    kwargs = {
+        "typed_buffer_input": constant_image,
+        "untyped_buffer_input": constant_image,
+        "simple_input": constant_image,
+        "float_arg": float_arg,
+        "int_arg": int_arg,
+        "generator_params": gp,
+    }
+    if len(extra_input_name):
+        gp["extra_input_name"] = extra_input_name
+        kwargs[extra_input_name] = constant_image_u16
 
-    r = cls.call(ctx,
-                 typed_buffer_input=constant_image,
-                 untyped_buffer_input=constant_image,
-                 simple_input=constant_image,
-                 float_arg=float_arg,
-                 int_arg=int_arg,
-                 extra_input=constant_image_u16,
-                 generator_params={
-                     "simple_input.type": hl.UInt(8),
-                     "tuple_output.type": [hl.Float(32),
-                                           hl.Float(32)],
-                     "untyped_buffer_input.type": hl.UInt(8),
-                     "untyped_buffer_output.dim": 3,
-                     "untyped_buffer_output.type": hl.UInt(8),
-                     "vectorize": True,
-                 })
+    r = cls.call(ctx, **kwargs)
 
     # return value is a tuple; unpack separately to avoid
     # making the callsite above unreadable
@@ -261,14 +260,19 @@ def test_complex(cls):
     assert b.type() == hl.Float(64)
     for x in range(32):
         for y in range(32):
-            expected = x + y + 1
+            if len(extra_input_name):
+                expected = x + y + 1
+            else:
+                expected = 0
             actual = b[x, y]
             assert expected == actual, "Expected %s Actual %s" % (expected,
                                                                   actual)
 
 
 if __name__ == "__main__":
-    # test_simple(simple_stub)
-    # test_complex(complex_stub)
-    # test_simple(SimplePy)
+    test_simple(simple_stub)
+    test_complex(complex_stub)
+    test_complex(complex_stub, extra_input_name = "foozz_input")
+    test_simple(SimplePy)
     test_complex(ComplexPy)
+    test_complex(ComplexPy, extra_input_name = "foo_input")

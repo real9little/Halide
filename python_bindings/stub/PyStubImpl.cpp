@@ -155,20 +155,6 @@ py::object call_impl(const GeneratorFactory &factory,
                      const py::kwargs &kwargs) {
     auto generator = factory(context);
 
-    const auto arg_infos = generator->arginfos();
-    std::vector<ArgInfo> input_arguments, output_arguments;
-    std::map<std::string, ArgInfo> input_arguments_map;
-    std::set<std::string> inputs_seen;
-    for (const auto &a : arg_infos) {
-        if (a.dir == Internal::ArgInfoDirection::Input) {
-            input_arguments.push_back(a);
-            input_arguments_map[a.name] = a;
-        } else {
-            output_arguments.push_back(a);
-        }
-    }
-    size_t kw_inputs_specified = 0;
-
     // GeneratorParams are always specified as an optional named parameter
     // called "generator_params", which is expected to be a python dict.
     // If generatorparams are specified, do them first, before any Inputs.
@@ -200,10 +186,24 @@ py::object call_impl(const GeneratorFactory &factory,
         }
     }
 
-    // Inputs can be specified by either positional or named args,
-    // but may not be mixed. (i.e., if any inputs are specified as a named
-    // argument, they all must be specified that way; otherwise they must all be
-    // positional, in the order declared in the Generator.)
+    // Don't call arginfos() until after we have set all GeneratorParams.
+
+    const auto arg_infos = generator->arginfos();
+    std::vector<ArgInfo> input_arguments, output_arguments;
+    std::map<std::string, ArgInfo> input_arguments_map;
+    std::set<std::string> inputs_seen;
+    for (const auto &a : arg_infos) {
+        if (a.dir == Internal::ArgInfoDirection::Input) {
+            input_arguments.push_back(a);
+            input_arguments_map[a.name] = a;
+        } else {
+            output_arguments.push_back(a);
+        }
+    }
+
+    _halide_user_assert(args.size() <= input_arguments.size()) << "Generator '" << generator->name()
+                                                               << "' allows at most " << input_arguments.size()
+                                                               << " positional args, but " << args.size() << " were specified.";
 
     const auto bind_one = [&generator](py::handle h, const ArgInfo &a) {
         py::object o = py::cast<py::object>(h);
@@ -215,6 +215,13 @@ py::object call_impl(const GeneratorFactory &factory,
             generator->bind_input(a.name, to_input_vector<Expr>(o, a.name));
         }
     };
+
+    for (size_t i = 0; i < args.size(); i++) {
+        const auto &a = input_arguments[i];
+        _halide_user_assert(inputs_seen.count(a.name) == 0) << "Input " << a.name << " specified multiple times.";
+        inputs_seen.insert(a.name);
+        bind_one(args[i], a);
+    }
 
     for (auto kw : kwargs) {
         const std::string name = kw.first.cast<std::string>();
@@ -231,25 +238,11 @@ py::object call_impl(const GeneratorFactory &factory,
 
         const auto &a = it->second;
         bind_one(value, a);
-        kw_inputs_specified++;
     }
 
-    if (args.empty()) {
-        // No arguments specified positionally, so they must all be via keywords.
-        _halide_user_assert(kw_inputs_specified == input_arguments.size())
-            << "Expected exactly " << input_arguments.size() << " keyword args for inputs, but saw " << kw_inputs_specified << ".";
-    } else {
-        // Some positional arguments, so all inputs must be positional (and none via keyword).
-        _halide_user_assert(kw_inputs_specified == 0) << "Cannot use both positional and keyword arguments for inputs.";
-        _halide_user_assert(args.size() == input_arguments.size())
-            << "Expected exactly " << input_arguments.size() << " positional args for inputs, but saw " << args.size() << ".";
-        for (size_t i = 0; i < args.size(); i++) {
-            const auto &a = input_arguments[i];
-            _halide_user_assert(inputs_seen.count(a.name) == 0) << "Input " << a.name << " specified multiple times.";
-            inputs_seen.insert(a.name);
-            bind_one(args[i], a);
-        }
-    }
+    _halide_user_assert(inputs_seen.size() == input_arguments.size()) << "Generator '" << generator->name()
+                                                                      << "' requires " << input_arguments.size()
+                                                                      << " args, but " << inputs_seen.size() << " were specified.";
 
     generator->build_pipeline();
 

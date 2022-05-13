@@ -18,6 +18,7 @@ Halide::Buffer<Type, 3> make_image(int extra) {
 class Complex : public Halide::Generator<Complex> {
 public:
     GeneratorParam<bool> vectorize{"vectorize", true};
+    GeneratorParam<std::string> extra_input_name{"extra_input_name", ""};
 
     Input<Buffer<uint8_t, 3>> typed_buffer_input{"typed_buffer_input"};
     Input<Buffer<void, 3>> untyped_buffer_input{"untyped_buffer_input"};
@@ -36,7 +37,10 @@ public:
         // Pointers returned by add_input() are managed by the Generator;
         // user code must not free them. We can stash them in member variables
         // as-is or in containers, like so:
-        extra_input = add_input<Buffer<uint16_t, 3>>("extra_input");
+        std::string n = extra_input_name;
+        if (!n.empty()) {
+            extra_input = add_input<Buffer<uint16_t, 3>>(n);
+        }
         extra_output = add_output<Buffer<double, 2>>("extra_output");
     }
 
@@ -45,6 +49,7 @@ public:
         typed_buffer_output(x, y, c) = cast<float>(typed_buffer_input(x, y, c));
         untyped_buffer_output(x, y, c) = cast(untyped_buffer_output.output_type(), untyped_buffer_input(x, y, c));
 
+        Func intermediate("intermediate");
         intermediate(x, y, c) = simple_input(x, y, c) * float_arg;
 
         tuple_output(x, y, c) = Tuple(
@@ -55,13 +60,14 @@ public:
         // and not produce another input for the Stub or AOT filter.
         Buffer<uint8_t, 3> static_compiled_buffer = make_image<uint8_t>(42);
         static_compiled_buffer_output = static_compiled_buffer;
-
-        (*extra_output)(x, y) = cast<double>((*extra_input)(x, y, 0) + 1);
+        if (extra_input) {
+            (*extra_output)(x, y) = cast<double>((*extra_input)(x, y, 0) + 1);
+        } else {
+            (*extra_output)(x, y) = cast<double>(0);
+        }
 
         scalar_output() = float_arg + int_arg;
-    }
 
-    void schedule() {
         intermediate.compute_at(tuple_output, y);
         intermediate.specialize(vectorize).vectorize(x, natural_vector_size<float>());
     }
@@ -69,10 +75,8 @@ public:
 private:
     Var x{"x"}, y{"y"}, c{"c"};
 
-    Func intermediate{"intermediate"};
-
-    Input<Buffer<uint16_t, 3>> *extra_input;
-    Output<Buffer<double, 2>> *extra_output;
+    Input<Buffer<uint16_t, 3>> *extra_input = nullptr;
+    Output<Buffer<double, 2>> *extra_output = nullptr;
 };
 
 }  // namespace

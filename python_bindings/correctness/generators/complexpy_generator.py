@@ -7,6 +7,7 @@ c = hl.Var('c')
 @hl.generator(name = "complexpy")
 class ComplexPy:
     vectorize = hl.GeneratorParam(True)
+    extra_input_name = hl.GeneratorParam("")
 
     typed_buffer_input = hl.InputBuffer(hl.UInt(8), 3)
     untyped_buffer_input = hl.InputBuffer(None, 3)
@@ -21,12 +22,10 @@ class ComplexPy:
     static_compiled_buffer_output = hl.OutputBuffer(hl.UInt(8), 3)
     scalar_output = hl.OutputScalar(hl.Float(32))
 
-    # Just an intermediate Func we need to share between generate() and schedule()
-    intermediate = hl.Func()
-
     def configure(self):
         g = self
-        g.add_input("extra_input", hl.InputBuffer(hl.UInt(16), 3))
+        if len(g.extra_input_name):
+            g.add_input(g.extra_input_name, hl.InputBuffer(hl.UInt(16), 3))
         g.add_output("extra_output", hl.OutputBuffer(hl.Float(64), 2))
 
     def generate(self):
@@ -36,9 +35,10 @@ class ComplexPy:
         g.typed_buffer_output[x, y, c] = hl.f32(g.typed_buffer_input[x, y, c])
         g.untyped_buffer_output[x, y, c] = hl.cast(g.untyped_buffer_output.output_type(), g.untyped_buffer_input[x, y, c])
 
-        g.intermediate[x, y, c] = g.simple_input[x, y, c] * g.float_arg
+        intermediate = hl.Func("intermediate")
+        intermediate[x, y, c] = g.simple_input[x, y, c] * g.float_arg
 
-        g.tuple_output[x, y, c] = (g.intermediate[x, y, c], g.intermediate[x, y, c] + g.int_arg)
+        g.tuple_output[x, y, c] = (intermediate[x, y, c], intermediate[x, y, c] + g.int_arg)
 
         # This should be compiled into the Generator product itself,
         # and not produce another input for the Stub or AOT filter.
@@ -49,12 +49,17 @@ class ComplexPy:
                     static_compiled_buffer[xx, yy, cc] = xx + yy + cc + 42
 
         g.static_compiled_buffer_output[x, y, c] = static_compiled_buffer[x, y, c]
-        g.extra_output[x, y] = hl.f64(g.extra_input[x, y, 0] + 1)
+
+        extra_input = getattr(g, g.extra_input_name, None)
+        if extra_input:
+            g.extra_output[x, y] = hl.f64(extra_input[x, y, 0] + 1)
+        else:
+            g.extra_output[x, y] = hl.f64(0)
 
         g.scalar_output[()] = g.float_arg + g.int_arg
 
-        g.intermediate.compute_at(g.tuple_output, y);
-        g.intermediate.specialize(g.vectorize).vectorize(x, g.natural_vector_size(hl.Float(32)));
+        intermediate.compute_at(g.tuple_output, y);
+        intermediate.specialize(g.vectorize).vectorize(x, g.natural_vector_size(hl.Float(32)));
 
 if __name__ == "__main__":
     hl.main()

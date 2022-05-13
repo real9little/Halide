@@ -340,9 +340,10 @@ class OutputScalar(OutputBuffer):
 class _Stage(Enum):
     generator_created = 0
     gp_created = 1
-    io_created = 2
+    gp_replaced = 2
+    io_created = 3
     configure_called = 4
-    gpio_replaced = 5
+    io_replaced = 5
     pipeline_built = 6
 
     def __lt__(self, other):
@@ -380,18 +381,12 @@ class Generator(ABC):
     def natural_vector_size(self, type: Type) -> int:
         return self.target().natural_vector_size(type)
 
-    # Inputs can be specified by either positional or named args,
-    # but may not be mixed. (i.e., if any inputs are specified as a named
-    # argument, they all must be specified that way; otherwise they must all be
-    # positional, in the order declared in the Generator.)
-    #
-    # GeneratorParams can only be specified by name, and are always optional.
     @classmethod
     def call(cls, context: GeneratorContext, *args, **kwargs):
         _check(isinstance(context, GeneratorContext), "The first argument to call() must be a GeneratorContext")
         generator = cls(context)
 
-        # Process the kwargs first: first, fill in all the GeneratorParams
+        # First, fill in all the GeneratorParams
         # (in case some are tied to Inputs).
         gp = kwargs.pop("generator_params", {})
         _check(isinstance(gp, dict), "generator_params must be a dict")
@@ -400,40 +395,25 @@ class Generator(ABC):
 
         generator._advance_to_stage(_Stage.configure_called)
 
-        # Now inputs:
+        _check(len(args) <= len(generator._arginfos_in), "Generator '%s' allows at most %d positional args, but %d were specified." % (generator._get_name(), len(generator._arginfos_in), len(args)))
+
+        inputs_set = []
+        for i in range(0, len(args)):
+            a = generator._arginfos_in[i]
+            k = a.name
+            v = args[i]
+            _check(not k in inputs_set, "Input %s was specified multiple times." % k)
+            inputs_set.append(k)
+            generator._bind_input(k, [v])
+
         input_names = [a.name for a in generator._arginfos_in]
-        inputs_seen = []
-        kw_inputs_specified = 0
         for k, v in kwargs.items():
             _check(k in input_names, "Unknown input '%s' specified via keyword argument." % k)
-            _check(not k in inputs_seen, "Input %s specified multiple times." % k)
-            inputs_seen.append(k)
+            _check(not k in inputs_set, "Input %s specified multiple times." % k)
+            inputs_set.append(k)
             generator._bind_input(k, [v])
-            kw_inputs_specified = kw_inputs_specified + 1
 
-        if len(args) == 0:
-            # No args specified positionally, so they must all be via keywords.
-            _check(
-                kw_inputs_specified == len(generator._arginfos_in),
-                "Expected exactly %d keyword args for inputs, but saw %d." % (len(generator._arginfos_in), kw_inputs_specified),
-            )
-        else:
-            # Some positional args, so all inputs must be positional (and none via keyword).
-            _check(
-                kw_inputs_specified == 0,
-                "Cannot use both positional and keyword arguments for inputs.",
-            )
-            _check(
-                len(args) == len(generator._arginfos_in),
-                "Expected exactly %d positional args for inputs, but saw %d." % (len(generator._arginfos_in), len(args)),
-            )
-            for i in range(0, len(args)):
-                a = generator._arginfos_in[i]
-                k = a.name
-                v = args[i]
-                _check(not k in inputs_seen, "Input %s specified multiple times." % k)
-                inputs_seen.append(k)
-                generator._bind_input(k, [v])
+        _check(len(inputs_set) == len(generator._arginfos_in), "Generator '%s' requires %d args, but %d were specified." % (generator._get_name(), len(generator._arginfos_in), len(inputs_set)))
 
         generator._build_pipeline()
 
@@ -447,7 +427,7 @@ class Generator(ABC):
     def __setattr__(self, name, value):
         r = getattr(self, "_requirements", None)
         s = getattr(self, "_stage", None)
-        if r and s and (name in r) and (s != _Stage.configure_called):
+        if r and s and (name in r) and (s != _Stage.configure_called) and (s != _Stage.gp_created):
             raise AttributeError("Invalid write to field '%s'" % name)
         super().__setattr__(name, value)
 
@@ -492,28 +472,29 @@ class Generator(ABC):
         if not arginfos is None:
             arginfos.append(ArgInfo(name, *io._get_direction_and_kind(), types, dimensions))
 
-    def add_input(self, name: str, io):
+    def add_input(self, name: str, io) -> None:
         _check(self._in_configure > 0, "Can only call add_input() from the configure() method.")
         _check(not hasattr(self, name),
                "Cannot call add_input('%s') because the class already has a member of that name." % name)
         _check(isinstance(io, (InputBuffer, InputScalar)),
                "Cannot call add_input() with an object of type '%s'." % type(io))
-        return self._add_gpio(name, io, self._inputs_dict, self._arginfos_in)
+        self._add_gpio(name, io, self._inputs_dict, self._arginfos_in)
 
-    def add_output(self, name: str, io):
+    def add_output(self, name: str, io) -> None:
         _check(self._in_configure > 0, "Can only call add_output() from the configure() method.")
         _check(not hasattr(self, name),
                "Cannot call add_output('%s') because the class already has a member of that name." % name)
         _check(isinstance(io, (OutputBuffer, OutputScalar)),
                "Cannot call add_output() with an object of type '%s'." % type(io))
-        return self._add_gpio(name, io, self._outputs_dict, self._arginfos_out)
+        self._add_gpio(name, io, self._outputs_dict, self._arginfos_out)
 
     def _advance_to_stage(self, new_stage: _Stage):
         _stage_advancers = {
             _Stage.gp_created: self._advance_to_gp_created,
+            _Stage.gp_replaced: self._advance_to_gp_replaced,
             _Stage.io_created: self._advance_to_io_created,
             _Stage.configure_called: self._advance_to_configure_called,
-            _Stage.gpio_replaced: self._advance_to_gpio_replaced,
+            _Stage.io_replaced: self._advance_to_io_replaced,
         }
         assert new_stage in _stage_advancers
         a = _stage_advancers[new_stage]
@@ -541,7 +522,7 @@ class Generator(ABC):
                 self._set_generatorparam_value(k, v)
 
     def _advance_to_io_created(self):
-        self._advance_to_stage(_Stage.gp_created)
+        self._advance_to_stage(_Stage.gp_replaced)
         assert self._gp_dict is not None
         assert not self._inputs_dict
         assert not self._outputs_dict
@@ -601,29 +582,31 @@ class Generator(ABC):
         self.configure()
         self._in_configure -= 1
 
-        self._stage = _Stage.configure_called
-
-    def _advance_to_gpio_replaced(self):
-        self._advance_to_stage(_Stage.configure_called)
-
-        def _finalize_one(gpio_dict):
-            for name, gpio in gpio_dict.items():
-                # Note that new_io will be a different type (e.g. InputBuffer -> ImageParam)
-                new_gpio = self._replacements.pop(name, None)
-                if not new_gpio:
-                    new_gpio = gpio._make_replacement(None, self._requirements[name])
-                setattr(self, name, new_gpio)
-
-        _finalize_one(self._gp_dict)
-        _finalize_one(self._inputs_dict)
-        _finalize_one(self._outputs_dict)
-
         _check(
             len(self._outputs_dict) > 0,
             "Generator '%s' must declare at least one output." % self._get_name(),
         )
 
-        self._stage = _Stage.gpio_replaced
+        self._stage = _Stage.configure_called
+
+    def _replace_one(self, gpio_dict):
+        for name, gpio in gpio_dict.items():
+            # Note that new_io will be a different type (e.g. InputBuffer -> ImageParam)
+            new_gpio = self._replacements.pop(name, None)
+            if not new_gpio:
+                new_gpio = gpio._make_replacement(None, self._requirements[name])
+            setattr(self, name, new_gpio)
+
+    def _advance_to_gp_replaced(self):
+        self._advance_to_stage(_Stage.gp_created)
+        self._replace_one(self._gp_dict)
+        self._stage = _Stage.gp_replaced
+
+    def _advance_to_io_replaced(self):
+        self._advance_to_stage(_Stage.configure_called)
+        self._replace_one(self._inputs_dict)
+        self._replace_one(self._outputs_dict)
+        self._stage = _Stage.io_replaced
 
     # --------------- AbstractGenerator methods (partial)
     def _get_name(self) -> str:
@@ -648,7 +631,7 @@ class Generator(ABC):
             self._unhandled_generator_params[name] = value
 
     def _build_pipeline(self) -> Pipeline:
-        self._advance_to_stage(_Stage.gpio_replaced)
+        self._advance_to_stage(_Stage.io_replaced)
 
         assert not self._pipeline
         assert not self._input_parameters
@@ -684,7 +667,7 @@ class Generator(ABC):
         return [self._output_funcs[name]]
 
     def _bind_input(self, name: str, values: list[object]):
-        assert self._stage < _Stage.gpio_replaced
+        assert self._stage < _Stage.io_replaced
         self._advance_to_stage(_Stage.configure_called)
         _check(len(values) == 1, "Too many values specified for input: %s" % name)
         _check(name in self._inputs_dict, "There is no input with the name: %s" % name)
