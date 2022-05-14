@@ -2,7 +2,6 @@
 Bilateral histogram.
 """
 
-
 import halide as hl
 
 
@@ -38,9 +37,12 @@ class bilateral_grid:
 
         # Blur the histogram using a five-tap filter
         blurx, blury, blurz = hl.Func('blurx'), hl.Func('blury'), hl.Func('blurz')
-        blurz[x, y, z, c] = histogram[x, y, z-2, c] + histogram[x, y, z-1, c]*4 + histogram[x, y, z, c]*6 + histogram[x, y, z+1, c]*4 + histogram[x, y, z+2, c]
-        blurx[x, y, z, c] = blurz[x-2, y, z, c] + blurz[x-1, y, z, c]*4 + blurz[x, y, z, c]*6 + blurz[x+1, y, z, c]*4 + blurz[x+2, y, z, c]
-        blury[x, y, z, c] = blurx[x, y-2, z, c] + blurx[x, y-1, z, c]*4 + blurx[x, y, z, c]*6 + blurx[x, y+1, z, c]*4 + blurx[x, y+2, z, c]
+        blurz[x, y, z, c] = (histogram[x, y, z - 2, c] + histogram[x, y, z - 1, c] * 4 + histogram[x, y, z, c] * 6 +
+                             histogram[x, y, z + 1, c] * 4 + histogram[x, y, z + 2, c])
+        blurx[x, y, z, c] = (blurz[x - 2, y, z, c] + blurz[x - 1, y, z, c] * 4 + blurz[x, y, z, c] * 6 +
+                             blurz[x + 1, y, z, c] * 4 + blurz[x + 2, y, z, c])
+        blury[x, y, z, c] = (blurx[x, y - 2, z, c] + blurx[x, y - 1, z, c] * 4 + blurx[x, y, z, c] * 6 +
+                             blurx[x, y + 1, z, c] * 4 + blurx[x, y + 2, z, c])
 
         # Take trilinear samples to compute the output
         val = hl.clamp(clamped[x, y], 0.0, 1.0)
@@ -53,10 +55,11 @@ class bilateral_grid:
         yi = y / g.s_sigma
 
         interpolated = hl.Func('interpolated')
-        interpolated[x, y, c] = hl.lerp(hl.lerp(hl.lerp(blury[xi, yi, zi, c], blury[xi+1, yi, zi, c], xf),
-                                                hl.lerp(blury[xi, yi+1, zi, c], blury[xi+1, yi+1, zi, c], xf), yf),
-                                        hl.lerp(hl.lerp(blury[xi, yi, zi+1, c], blury[xi+1, yi, zi+1, c], xf),
-                                                hl.lerp(blury[xi, yi+1, zi+1, c], blury[xi+1, yi+1, zi+1, c], xf), yf), zf)
+        interpolated[x, y, c] = hl.lerp(
+            hl.lerp(hl.lerp(blury[xi, yi, zi, c], blury[xi + 1, yi, zi, c], xf),
+                    hl.lerp(blury[xi, yi + 1, zi, c], blury[xi + 1, yi + 1, zi, c], xf), yf),
+            hl.lerp(hl.lerp(blury[xi, yi, zi + 1, c], blury[xi + 1, yi, zi + 1, c], xf),
+                    hl.lerp(blury[xi, yi + 1, zi + 1, c], blury[xi + 1, yi + 1, zi + 1, c], xf), yf), zf)
 
         # Normalize
         g.bilateral_grid[x, y] = interpolated[x, y, 0] / interpolated[x, y, 1]
@@ -101,8 +104,10 @@ class bilateral_grid:
                 histogram.update().reorder(c, r.x, r.y, x, y).gpu_threads(x, y).unroll(c)
 
                 # Schedule the remaining blurs and the sampling at the end similarly.
-                blurx.compute_root().reorder(c, x, y, z).reorder_storage(c, x, y, z).vectorize(c).unroll(y, 2, hl.TailStrategy.RoundUp).gpu_tile(x, y, z, xi, yi, zi, 32, 8, 1, hl.TailStrategy.RoundUp)
-                blury.compute_root().reorder(c, x, y, z).reorder_storage(c, x, y, z).vectorize(c).unroll(y, 2, hl.TailStrategy.RoundUp).gpu_tile(x, y, z, xi, yi, zi, 32, 8, 1, hl.TailStrategy.RoundUp)
+                blurx.compute_root().reorder(c, x, y, z).reorder_storage(c, x, y, z).vectorize(c).unroll(
+                    y, 2, hl.TailStrategy.RoundUp).gpu_tile(x, y, z, xi, yi, zi, 32, 8, 1, hl.TailStrategy.RoundUp)
+                blury.compute_root().reorder(c, x, y, z).reorder_storage(c, x, y, z).vectorize(c).unroll(
+                    y, 2, hl.TailStrategy.RoundUp).gpu_tile(x, y, z, xi, yi, zi, 32, 8, 1, hl.TailStrategy.RoundUp)
                 g.bilateral_grid.compute_root().gpu_tile(x, y, xi, yi, 32, 8)
                 interpolated.compute_at(g.bilateral_grid, xi).vectorize(c)
             else:
