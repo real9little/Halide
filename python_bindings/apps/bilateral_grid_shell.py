@@ -9,10 +9,11 @@ import os
 import sys
 from timeit import Timer
 
+
 def main():
     if len(sys.argv) < 5:
         print("Usage: %s input.png output.png range_sigma timing_iterations" % sys.argv[0])
-        print("e.g. %s input.png output.png 0.1 10" % sys.argv[0]);
+        print("e.g. %s input.png output.png 0.1 10" % sys.argv[0])
         sys.exit(0)
 
     input_path = sys.argv[1]
@@ -40,8 +41,9 @@ def main():
     output_buf_u8 = output_buf.astype(np.uint8)
     imageio.imsave(output_path, output_buf_u8)
 
-    print("Success!");
+    print("Success!")
     sys.exit(0)
+
 
 if __name__ == '__main__':
     main()
