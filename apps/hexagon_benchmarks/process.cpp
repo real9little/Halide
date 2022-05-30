@@ -41,6 +41,7 @@ int main(int argc, char **argv) {
     Gaussian5x5Descriptor gaussian5x5_pipeline(W, H);
     SobelDescriptor sobel_pipeline(W, H);
     Conv3x3a32Descriptor conv3x3a32_pipeline(W, H);
+    HarrisDescriptor harris_pipeline(W, H);
 
     std::vector<PipelineDescriptorBase *> pipelines = {&conv3x3a16_pipeline, &dilate3x3_pipeine, &median3x3_pipeline,
                                                        &gaussian5x5_pipeline, &sobel_pipeline, &conv3x3a32_pipeline};

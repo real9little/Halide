@@ -2,7 +2,7 @@
 #define PROCESS_H
 
 #include "HalideBuffer.h"
-
+#include "halide_image_io.h"
 #ifdef CONV3X3A16
 #include "conv3x3a16.h"
 #endif
@@ -27,6 +27,8 @@
 #include "conv3x3a32.h"
 #endif
 
+
+
 template<typename T>
 T clamp(T val, T min, T max) {
     if (val < min)
@@ -36,6 +38,12 @@ T clamp(T val, T min, T max) {
     return val;
 }
 
+#include <string>
+std::string img_path = "/data/local/tmp/hexagon_benchmarks/gray.jpg";
+//std::string img_path = "gray.jpg";
+
+#define USE_IMAGE
+
 struct PipelineDescriptorBase {
     virtual void init() = 0;
     virtual const char *name() = 0;
@@ -43,6 +51,61 @@ struct PipelineDescriptorBase {
     virtual bool verify(int W, int H) = 0;
     virtual bool defined() = 0;
     virtual void finalize() = 0;
+};
+
+class HarrisDescriptor : public PipelineDescriptorBase {
+    Halide::Runtime::Buffer<uint8_t, 2> u8_in, u8_out;
+
+public:
+    HarrisDescriptor(int W, int H)
+        : u8_in(nullptr, W, H),
+          u8_out(nullptr, W, H) {
+    }
+
+    void init() {
+#ifdef HALIDE_RUNTIME_HEXAGON
+        u8_in.device_malloc(halide_hexagon_device_interface());
+        u8_out.device_malloc(halide_hexagon_device_interface());
+#else
+        u8_in.allocate();
+        u8_out.allocate();
+#endif
+#ifdef USE_IMAGE
+        u8_in = Halide::Tools::load_and_convert_image(img_path);
+#else
+        u8_in.for_each_value([&](uint8_t &x) {
+            x = static_cast<uint8_t>(rand());
+        });
+#endif
+        u8_out.fill(0);
+    }
+
+    const char *name() {
+        return "harris";
+    };
+
+    bool defined() {
+#ifdef HARRIS
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    bool verify(const int W, const int H) {
+        return true;
+    }
+
+    int run() {
+#ifdef Harris
+        return harris(u8_in, u8_out);
+#endif
+        return 1;
+    }
+    void finalize() {
+        u8_in.device_free();
+        u8_out.device_free();
+    }
 };
 
 class Conv3x3a16Descriptor : public PipelineDescriptorBase {
@@ -67,9 +130,13 @@ public:
         i8_mask.allocate();
 #endif
 
+#ifdef USE_IMAGE
+        u8_in = Halide::Tools::load_and_convert_image(img_path);
+#else
         u8_in.for_each_value([&](uint8_t &x) {
             x = static_cast<uint8_t>(rand());
         });
+#endif
         u8_out.fill(0);
 
         i8_mask(0, 0) = 1;
@@ -153,9 +220,13 @@ public:
         u8_out.allocate();
 #endif
 
+#ifdef USE_IMAGE
+        u8_in = Halide::Tools::load_and_convert_image(img_path);
+#else
         u8_in.for_each_value([&](uint8_t &x) {
             x = static_cast<uint8_t>(rand());
         });
+#endif
         u8_out.fill(0);
     }
 
@@ -223,10 +294,13 @@ public:
         u8_in.allocate();
         u8_out.allocate();
 #endif
-
+#ifdef USE_IMAGE
+        u8_in = Halide::Tools::load_and_convert_image(img_path);
+#else
         u8_in.for_each_value([&](uint8_t &x) {
             x = static_cast<uint8_t>(rand());
         });
+#endif
         u8_out.fill(0);
     }
 
@@ -292,10 +366,13 @@ public:
         u8_in.allocate();
         u8_out.allocate();
 #endif
-
+#ifdef USE_IMAGE
+        u8_in = Halide::Tools::load_and_convert_image(img_path);
+#else
         u8_in.for_each_value([&](uint8_t &x) {
             x = static_cast<uint8_t>(rand());
         });
+#endif
         u8_out.fill(0);
     }
 
@@ -363,10 +440,13 @@ public:
         u8_in.allocate();
         u8_out.allocate();
 #endif
-
+#ifdef USE_IMAGE
+        u8_in = Halide::Tools::load_and_convert_image(img_path);
+#else
         u8_in.for_each_value([&](uint8_t &x) {
             x = static_cast<uint8_t>(rand());
         });
+#endif
         u8_out.fill(0);
     }
 
@@ -443,10 +523,13 @@ public:
         u8_out.allocate();
         i8_mask.allocate();
 #endif
-
+#ifdef USE_IMAGE
+        u8_in = Halide::Tools::load_and_convert_image(img_path);
+#else
         u8_in.for_each_value([&](uint8_t &x) {
             x = static_cast<uint8_t>(rand());
         });
+#endif
         u8_out.fill(0);
 
         i8_mask(0, 0) = 1;

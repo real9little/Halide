@@ -1,7 +1,7 @@
 include ../support/Makefile.inc
 
 
-FILTERS ?= conv3x3a16 dilate3x3 median3x3 gaussian5x5 sobel conv3x3a32
+FILTERS ?= conv3x3a16 dilate3x3 median3x3 gaussian5x5 sobel conv3x3a32 harris
 
 ITERATIONS ?= 10
 
@@ -35,6 +35,10 @@ $(BIN)/%/median3x3.o: $(GENERATOR_BIN)/median3x3.generator
 $(BIN)/%/gaussian5x5.o: $(GENERATOR_BIN)/gaussian5x5.generator
 	@mkdir -p $(@D)
 	$^ -g gaussian5x5 -o $(@D) -e object,c_header -f gaussian5x5 target=$* ${SCHEDULING_OPTS}
+
+$(BIN)/%/harris.o: $(GENERATOR_BIN)/harris.generator
+	@mkdir -p $(@D)
+	$^ -g harris -o $(@D) -e object,c_header -f harris target=$* ${SCHEDULING_OPTS}
 
 $(BIN)/%/sobel.o: $(GENERATOR_BIN)/sobel.generator
 	@mkdir -p $(@D)

@@ -156,7 +156,7 @@ LDFLAGS-host-hvx ?= $(LDFLAGS)
 LDFLAGS-hexagon-32-qurt-hvx =
 # Use the statically-linked version of libc++ on Android by default, for simplicity
 # of deployment. (Despite the name, this applies to libc++, not libstdc++)
-LDFLAGS-arm-64-android ?= -llog -fPIE -pie -static-libstdc++
+LDFLAGS-arm-64-android ?= -llog -fPIE -pie -static-libstdc++ -lz -L $(dir $(LIB_HALIDE))../../src/runtime/hexagon_remote/bin/arm-64-android/ -lpng -ljpeg
 LDFLAGS-arm-64-android-arm_dot_prod ?= $(LDFLAGS-arm-64-android)
 LDFLAGS-arm-32-android ?= -llog -fPIE -pie -static-libstdc++
 
