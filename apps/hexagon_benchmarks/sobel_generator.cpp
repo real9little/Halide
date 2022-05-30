@@ -2,10 +2,16 @@
 
 using namespace Halide;
 
+Expr sum3x3(Func f, Var x, Var y) {
+    return f(x - 1, y - 1) + f(x - 1, y) + f(x - 1, y + 1) +
+           f(x, y - 1) + f(x, y) + f(x, y + 1) +
+           f(x + 1, y - 1) + f(x + 1, y) + f(x + 1, y + 1);
+}
+
 class Sobel : public Generator<Sobel> {
 public:
     Input<Buffer<uint8_t, 2>> input{"input"};
-    Output<Buffer<uint8_t, 2>> output{"output"};
+    Output<Buffer<float, 2>> output{"output"};
 
     GeneratorParam<bool> use_parallel_sched{"use_parallel_sched", true};
     GeneratorParam<bool> use_prefetch_sched{"use_prefetch_sched", true};
@@ -13,18 +19,34 @@ public:
     void generate() {
         bounded_input(x, y) = BoundaryConditions::repeat_edge(input)(x, y);
 
-        Func input_16{"input_16"};
-        input_16(x, y) = cast<uint16_t>(bounded_input(x, y));
+        Iy(x, y) = bounded_input(x - 1, y - 1) * (-1.0f / 12) + bounded_input(x - 1, y + 1) * (1.0f / 12) +
+                   bounded_input(x, y - 1) * (-2.0f / 12) + bounded_input(x, y + 1) * (2.0f / 12) +
+                   bounded_input(x + 1, y - 1) * (-1.0f / 12) + bounded_input(x + 1, y + 1) * (1.0f / 12);
+        Ix(x, y) = bounded_input(x - 1, y - 1) * (-1.0f / 12) + bounded_input(x + 1, y - 1) * (1.0f / 12) +
+                   bounded_input(x - 1, y) * (-2.0f / 12) + bounded_input(x + 1, y) * (2.0f / 12) +
+                   bounded_input(x - 1, y + 1) * (-1.0f / 12) + bounded_input(x + 1, y + 1) * (1.0f / 12);
+        Ixx(x, y) = Ix(x, y) * Ix(x, y);
+        Iyy(x, y) = Iy(x, y) * Iy(x, y);
+        Ixy(x, y) = Ix(x, y) * Iy(x, y);
+        Sxx(x, y) = sum3x3(Ixx, x, y);
+        Syy(x, y) = sum3x3(Iyy, x, y);
+        Sxy(x, y) = sum3x3(Ixy, x, y);
+        det(x, y) = Sxx(x, y) * Syy(x, y) - Sxy(x, y) * Sxy(x, y);
+        trace(x, y) = Sxx(x, y) + Syy(x, y);
+        output(x, y) = det(x, y) - 0.04f * trace(x, y) * trace(x, y);
 
-        sobel_x_avg(x, y) = input_16(x - 1, y) + 2 * input_16(x, y) + input_16(x + 1, y);
-        sobel_x(x, y) = absd(sobel_x_avg(x, y - 1), sobel_x_avg(x, y + 1));
-
-        sobel_y_avg(x, y) = input_16(x, y - 1) + 2 * input_16(x, y) + input_16(x, y + 1);
-        sobel_y(x, y) = absd(sobel_y_avg(x - 1, y), sobel_y_avg(x + 1, y));
-
-        // This sobel implementation is non-standard in that it doesn't take the square root
-        // of the gradient.
-        output(x, y) = cast<uint8_t>(clamp(sobel_x(x, y) + sobel_y(x, y), 0, 255));
+//        Func input_16{"input_16"};
+//        input_16(x, y) = cast<uint16_t>(bounded_input(x, y));
+//
+//        sobel_x_avg(x, y) = input_16(x - 1, y) + 2 * input_16(x, y) + input_16(x + 1, y);
+//        sobel_x(x, y) = absd(sobel_x_avg(x, y - 1), sobel_x_avg(x, y + 1));
+//
+//        sobel_y_avg(x, y) = input_16(x, y - 1) + 2 * input_16(x, y) + input_16(x, y + 1);
+//        sobel_y(x, y) = absd(sobel_y_avg(x - 1, y), sobel_y_avg(x + 1, y));
+//
+//        // This sobel implementation is non-standard in that it doesn't take the square root
+//        // of the gradient.
+//        output(x, y) = cast<uint8_t>(clamp(sobel_x(x, y) + sobel_y(x, y), 0, 255));
     }
 
     void schedule() {
@@ -66,8 +88,14 @@ public:
 
 private:
     Var x{"x"}, y{"y"};
-    Func sobel_x_avg{"sobel_x_avg"}, sobel_y_avg{"sobel_y_avg"};
-    Func sobel_x{"sobel_x"}, sobel_y{"sobel_y"};
+    Func Iy{"Iy"}, Ix{"Ix"}, Ixx{"Ixx"}, Iyy{"Iyy"}, Ixy{"Ixy"};
+    Func Sxx{"Sxx"};
+    Func Syy{"Syy"};
+    Func Sxy{"Sxy"};
+    Func det{"det"};
+    Func trace{"trace"};
+//    Func sobel_x_avg{"sobel_x_avg"}, sobel_y_avg{"sobel_y_avg"};
+//    Func sobel_x{"sobel_x"}, sobel_y{"sobel_y"};
     Func bounded_input{"bounded_input"};
 };
 
